@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>User Information</title>
+</head>
+<body>
+    <h1>User Information</h1>
+    <!-- <p>User ID: {{ user_id }}</p> -->
+    <p>Username: {{ username }}</p>
+    <h2>Friend List:</h2>
+    <ul>
+        {% for friend in friends %}
+            <li>{{ friend }}</li>
+        {% endfor %}
+    </ul>
+
+    <h2>Friend Requests:</h2>
+    <ul>
+        {% for request in friend_requests %}
+            <li>{{ request.sender_username }} wants to be your friend. <a href="{{ url_for('accept_request', request_id=request.id) }}">Accept</a> / <a href="{{ url_for('reject_request', request_id=request.id) }}">Reject</a></li>
+        {% endfor %}
+    </ul>
+
+    <h2>Add Friend:</h2>
+    <form action="/add_friend" method="POST">
+        <label for="friend_username">Friend's Username:</label>
+        <input type="text" id="friend_username" name="friend_username">
+        <button type="submit">Add Friend</button>
+    </form>
+    <br>
+    <a href="{{ url_for('logout') }}">Logout</a> 
+    
+    <!-- <script>
+        document.getElementById('addFriendForm').addEventListener('submit', function(event) {
+            event.preventDefault();
+            fetch('/add_friend', {
+                method: 'POST',
+                body: new FormData(this)
+            })
+            .then(response => {
+                // 如果请求成功，重定向到 info 页面
+                if (response.ok) {
+                    window.location.href = "{{ url_for('info') }}";
+                }
+            })
+            .catch(error => console.error('Error:', error));
+        });
+    </script>
+
+<script>
+    // 获取 URL 中的参数
+    const urlParams = new URLSearchParams(window.location.search);
+    // 检查是否包含 friend_added 参数，并且它的值为 true
+    if (urlParams.has('friend_added') && urlParams.get('friend_added') === 'true') {
+        // 显示添加好友成功的消息
+        alert('Friend request sent successfully');
+    }
+</script> -->
+
+
+</body>
+</html>
