@@ -1,10 +1,14 @@
 from flask import Flask, request, redirect, url_for, render_template, session, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
+from flask import Flask, render_template, request, redirect, url_for, session
+from flask_socketio import SocketIO, emit, join_room, leave_room
+from datetime import datetime
 
 app = Flask(__name__)
+socketio = SocketIO(app)
 
-app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://postgres:20010422@localhost:5432/postgres'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://postgres@localhost:5432/postgres'
 app.config['SECRET_KEY'] = 'your_secret_key'
 db = SQLAlchemy(app)
 
@@ -25,6 +29,21 @@ class FriendRequests(db.Model):
     receiver_username = db.Column(db.String(80), nullable=False)
     status = db.Column(db.String(20), default='pending')
 
+class Room(db.Model):
+    room_id = db.Column(db.Integer, primary_key=True)
+    room_name = db.Column(db.String(80), nullable=False)
+    created_at = db.Column(db.DateTime, default=db.func.current_timestamp())
+
+class RoomMember(db.Model):
+    user_id = db.Column(db.String(80), db.ForeignKey('users.username'), primary_key=True)
+    room_id = db.Column(db.Integer, db.ForeignKey('room.room_id'), primary_key=True)
+
+class RoomMessage(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    room_id = db.Column(db.Integer, db.ForeignKey('room.room_id'), nullable=False)
+    sender_id = db.Column(db.String(80), db.ForeignKey('users.username'), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    sent_at = db.Column(db.DateTime, server_default=db.func.current_timestamp())
 
 
 @app.route('/')
@@ -68,10 +87,18 @@ def info():
     if 'username' in session:
         username = session['username']
         friend_requests = get_friend_requests(username)
-        friends=get_friends(username)
-        return render_template('info.html', username=session['username'], friends=friends, friend_requests=friend_requests)
+        friends = get_friends(username)
+        rooms = get_rooms(username)
+
+        info_data = {
+            'username': username,
+            'friend_requests': friend_requests,
+            'friends': friends,
+            'rooms': rooms
+        }
+        return render_template("info.html", info_data=info_data)
     else:
-        return redirect(url_for('login'))
+        return render_template('login.html')
     
 def get_friends(username):
     user = Users.query.filter_by(username=username).first()
@@ -84,6 +111,23 @@ def get_friend_requests(username):
     user = Users.query.filter_by(username=username).first()
     if user:
         return FriendRequests.query.filter_by(receiver_username=username).all()
+    return []
+
+def get_rooms(username):
+    user = Users.query.filter_by(username=username).first()
+    if user:
+        rooms = db.session.query(
+            Room.room_id, 
+            Room.room_name, 
+            Room.created_at
+        ).join(RoomMember, RoomMember.room_id == Room.room_id)\
+         .filter(RoomMember.user_id == username).all()
+        rooms_list = [{
+            'room_id': room_id, 
+            'room_name': room_name, 
+            'created_at': created_at.strftime('%Y-%m-%d %H:%M:%S')  # 格式化日期时间
+        } for room_id,room_name, created_at in rooms]
+        return rooms_list
     return []
 
 @app.route('/logout')
@@ -146,7 +190,109 @@ def reject_request(request_id):
         return redirect(url_for('info'))
     else:
         return 'Friend request not found'
+    
+@app.route('/create_room', methods=['POST'])
+def create_room():
+    if 'username' in session:
+        room_name = request.form['room_name']
+        existing_room = Room.query.filter_by(room_name=room_name).first()
+        if existing_room:
+            return "Room name already taken"
+        new_room = Room(room_name=room_name)
+        db.session.add(new_room)
+        db.session.commit()
+        current_user_username = session.get('username')
+        if current_user_username:
+            current_user = Users.query.filter_by(username=current_user_username).first()
+            if current_user:
+                new_room_member = RoomMember(user_id=current_user.username, room_id=new_room.room_id)
+                db.session.add(new_room_member)
+                db.session.commit()
+        return redirect(url_for('info'))
+    else:
+        return redirect(url_for('login'))
 
+@app.route('/join', methods=['POST'])
+def join():
+    if 'username' in session:
+        room_name = request.form.get('room_name')
+        if room_name:
+            existing_room = Room.query.filter_by(room_name=room_name).first()
+            if existing_room:
+                room_id = existing_room.room_id
+                return redirect(url_for('chat', room_id=room_id, user_name=session.get('username')))
+            else:
+                return "Room does not exist", 404
+        else:
+            return "Room name is required", 400
+    else:
+        return redirect(url_for('login'))
+
+@app.route('/chat/<room_id>/<user_name>')
+def chat(room_id, user_name):
+    room_name = get_room_name_by_id(room_id)
+    chat_info = {
+        'room_id': room_id,
+        'room_name': room_name,
+        'username': user_name
+    }
+    return render_template('chat.html', chat_info=chat_info)
+
+def get_room_name_by_id(room_id):
+    room = Room.query.filter_by(room_id=room_id).first()
+    if room:
+        return room.room_name
+    else:
+        return None
+
+@socketio.on('connect')
+def handle_connect():
+    print('Client connected')
+
+@socketio.on('join_room')
+def handle_join_room(data):
+    room_id = data['room_id']
+    username = data['username']
+    join_room(room_id) 
+    history_messages = RoomMessage.query.filter_by(room_id=room_id).order_by(RoomMessage.sent_at.desc()).limit(5).all()
+    history_messages.reverse()
+    for message in history_messages:
+        emit('message', {
+            'user': message.sender_id,
+            'text': message.content,
+            'sent_at': message.sent_at.strftime('%Y-%m-%d %H:%M:%S')
+        }, room=request.sid)
+    room_name = get_room_name_by_id(room_id)
+    emit('status', {'messages': f'{username} has joined the room {room_name}.'}, room=room_id, include_self=True)
+
+@socketio.on('message')
+def handle_message(data):
+    room_id = data['room_id']
+    sender_id = data['username']
+    content = data['text']
+    sent_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    new_message = RoomMessage(
+        room_id=room_id,
+        sender_id=sender_id,
+        content=content,
+    )
+
+    db.session.add(new_message)
+    db.session.commit()
+
+    emit('message', {'user': sender_id, 'text': content, 'sent_at': sent_at}, room=room_id)
+
+@socketio.on('leave_room')
+def handle_leave_room(data):
+    room_id = data['room_id']
+    username = data['username']
+    # 用户离开聊天室
+    leave_room(room_id)
+    # 向聊天室内的其他用户广播离开消息
+    emit('status', {'messages': f'{username} has left the room.'}, room=room_id)
 
 if __name__ == "__main__":
+    with app.app_context():
+        db.create_all()
     app.run(debug=True)
