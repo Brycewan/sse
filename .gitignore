@@ -1,0 +1,11 @@
+venv/
+.venv/
+*.
+*.tmp
+test_data/
+.svn/
+.vscode/
+.idea/
+examples/
+__pycache__
+.DS_Store

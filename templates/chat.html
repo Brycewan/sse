@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat Room</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.2.0/socket.io.js"></script>
+    <style>
+        #messages { list-style-type: none; margin: 0; padding: 0; }
+        #messages li { padding: 8px; margin-bottom: 2px; background-color: #f3f3f3; }
+    </style>
+</head>
+<body>
+    <h1>Room: {{ chat_info.room_name }}</h1>
+    <p>You are logged in as: {{ chat_info.username }}</p>
+
+    <ul id="messages"></ul>
+    <form id="send-message">
+        <input id="message" autocomplete="off" placeholder="Type your message here..." /><button>Send</button>
+    </form>
+
+    <button id="leave-room">Leave Chat Room</button>
+
+    <script>
+    let socket = io.connect(location.protocol + '//' + document.domain + ':' + location.port);
+    let roomId = "{{ chat_info.room_id }}";
+    let userName = "{{ chat_info.username }}";
+
+    // 当接收到消息时
+    socket.on('message', function(data) {
+        let li = document.createElement('li');
+        li.textContent = data.user + ': ' + data.text + '(' + data.sent_at +')';
+        document.getElementById('messages').appendChild(li);
+        window.scrollTo(0, document.body.scrollHeight);
+    });
+
+    // 发送消息
+    document.getElementById('send-message').onsubmit = function(e) {
+        e.preventDefault(); // 阻止表单默认提交
+        let messageInput = document.getElementById('message');
+        let message = messageInput.value;
+        socket.emit('message', {'text': message, 'room_id': roomId, 'username': userName});
+        messageInput.value = '';
+        return false;
+    };
+
+    // 加入聊天室
+    socket.emit('join_room', {'room_id': roomId, 'username': userName});
+
+    socket.on('status', function(data) {
+        let li = document.createElement('li');
+        li.textContent = data.messages;
+        document.getElementById('messages').appendChild(li);
+    });
+    
+    // 离开聊天室时发送事件
+    window.onbeforeunload = function() {
+        socket.emit('leave_room', {'room_id': roomId, 'username': userName});
+    };
+
+    document.getElementById('leave-room').addEventListener('click', function() {
+        console.log("Leaving room");
+        if(confirm("Are you sure you want to leave the chat room?")) {
+            socket.emit('leave_room', {'room_id': roomId, 'username': userName});
+            window.location.href = '/info';
+        }
+    });
+
+    </script>
+</body>
+</html>
+
